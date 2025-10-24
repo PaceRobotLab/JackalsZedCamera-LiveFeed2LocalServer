@@ -148,7 +148,7 @@ def main():
             if npR is not None and npR.size > 0:
                # bgrR = npR[:, :, :3][:, :, ::-1]
                # bgrR = npR[:, :, :3][:, :, [1, 2, 0]]
-                bgrR = npR[:, :, :3]
+                bgrR = npR[:, :, :3]      #FOR RGB NORMAL CAM FEED
                 okR, jpgR = cv2.imencode(".jpg", bgrR, [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
                 if okR:
                     put_latest(right_q, jpgR.tobytes())
