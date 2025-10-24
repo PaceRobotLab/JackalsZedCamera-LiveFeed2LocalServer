@@ -1,0 +1,5 @@
+pyzed
+numpy
+websocket
+fastapi
+rclpy
