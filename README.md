@@ -77,8 +77,10 @@ The detailed guide covers:
 
 ## Project status
 
-The streaming path is intended for trusted LAN use. The navigation controller is
-experimental and requires validation for each robot's sensor frames, mounting,
-topic names, dynamics, and operating environment.
+The streaming path is designed to work over a trusted local Wi-Fi network or a
+wired LAN. Internet-facing or untrusted-network deployments should add TLS
+(`wss://`) and stronger access control. The navigation controller is experimental
+and requires validation for each robot's sensor frames, mounting, topic names,
+dynamics, and operating environment.
 
 No open-source license has been selected yet.

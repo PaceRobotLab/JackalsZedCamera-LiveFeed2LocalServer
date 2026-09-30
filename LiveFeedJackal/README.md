@@ -328,7 +328,8 @@ export JPEG_Q=75
   optimization for dense clouds.
 - The server stores connection state in memory and should run with one Uvicorn
   worker unless an external broker is added.
-- Use TLS (`wss://`) and stronger access control outside a trusted LAN.
+- Streaming is designed for a trusted local Wi-Fi network or wired LAN. Use TLS
+  (`wss://`) and stronger access control on public or untrusted networks.
 
 ## License
 
