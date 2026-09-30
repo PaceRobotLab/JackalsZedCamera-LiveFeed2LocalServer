@@ -1,0 +1,5 @@
+# pyzed comes from the official Stereolabs ZED SDK.
+# rclpy, geometry_msgs, sensor_msgs, and sensor_msgs_py come from ROS 2.
+numpy>=1.23,<3
+opencv-python-headless>=4.8,<5
+websocket-client>=1.6,<2

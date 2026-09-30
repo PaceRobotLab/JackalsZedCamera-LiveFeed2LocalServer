@@ -8,8 +8,8 @@ import cv2
 import websocket  # pip install websocket-client
 
 # ================ Config =================
-SERVER      = os.environ.get("SERVER", "ws://192.168.0.118:8050")
-API_TOKEN   = os.environ.get("API_TOKEN", "supersecret123")
+SERVER      = os.environ.get("SERVER", "ws://127.0.0.1:8050")
+API_TOKEN   = os.environ.get("API_TOKEN", "")
 CAMERA_ID   = os.environ.get("CAMERA_ID", "jackal-zed2i")
 
 RESOLUTION  = os.environ.get("ZED_RES", "HD720")     # HD2K, HD1080, HD720, VGA
@@ -20,7 +20,7 @@ JPEG_Q      = int(os.environ.get("JPEG_Q", "90"))
 
 # Local saves OFF by default to reduce I/O jitter; flip to 1 if you want.
 SAVE_LOCAL  = os.environ.get("SAVE_LOCAL", "0") not in ("0","false","False","no","NO")
-SAVE_DIR    = Path(os.environ.get("SAVE_DIR", "/home/administrator/zed_ws_frames"))
+SAVE_DIR    = Path(os.environ.get("SAVE_DIR", str(Path.home() / "zed_ws_frames")))
 
 # single-slot queues = always keep latest frame (no lag build-up)
 QLEN = 1
@@ -59,14 +59,15 @@ def put_latest(q: queue.Queue, data: bytes):
         q.put_nowait(data)
 
 def ws_sender(name: str, eye: str, q: "queue.Queue[bytes]"):
-    url = f"{SERVER}/ws/push?camera_id={CAMERA_ID}&eye={eye}&authorization=Bearer%20{API_TOKEN}"
+    url = f"{SERVER}/ws/push?camera_id={CAMERA_ID}&eye={eye}"
+    headers = [f"Authorization: Bearer {API_TOKEN}"] if API_TOKEN else None
     # reconnect loop
     while not stop_event.is_set():
         ws = None
         try:
             # create_connection blocks; add timeout for safety
-            ws = websocket.create_connection(url, timeout=5)
-            print(f"[ws:{eye}] connected -> {url}")
+            ws = websocket.create_connection(url, timeout=5, header=headers)
+            print(f"[ws:{eye}] connected -> {SERVER} camera_id={CAMERA_ID}")
             while not stop_event.is_set():
                 try:
                     data = q.get(timeout=0.5)

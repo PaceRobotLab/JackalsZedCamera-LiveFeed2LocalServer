@@ -1,5 +1,2 @@
-pyzed
-numpy
-websocket
-fastapi
-rclpy
+-r requirements-server.txt
+-r requirements-robot.txt
