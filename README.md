@@ -14,6 +14,7 @@ obstacle avoidance while publishing velocity commands to the Jackal.
 |---|---|---|
 | Live stereo | `pubwebsoc.py` | Physical left and right ZED views |
 | ROS 2 depth navigation | `mycam9.py` | Annotated RGB, depth map, and Jackal control |
+| APPRCA object goal | `apprca_robot_bridge.py` | Browser goal, APPRCA detection, local approach |
 
 ```text
 Robot                                           Server / browser

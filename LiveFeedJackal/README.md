@@ -11,6 +11,9 @@ The project supports two robot-side modes:
 2. **Depth navigation (`mycam9.py`)** — publishes Jackal velocity commands,
    combines ZED depth with Velodyne ranges, and streams an annotated camera view
    plus a depth visualization.
+3. **APPRCA object goals (`apprca_robot_bridge.py`)** — receives verified object
+   guidance from APPRCA, calculates metric target distance locally, approaches
+   at low speed, and reports goal status to the browser.
 
 > [!CAUTION]
 > `mycam9.py` publishes real velocity commands. Test with the wheels raised, keep
@@ -206,6 +209,49 @@ http://<SERVER_IP>:8050/
 ```
 
 Enter the camera ID, normally `jackal-zed2i`, and select **Connect**.
+
+## APPRCA object-goal mode (without Nav2)
+
+This mode joins this repository to
+[`ActivePerceptionPipelineForARobotCognitiveArchitecture-APPRCA`](https://github.com/PaceRobotLab/ActivePerceptionPipelineForARobotCognitiveArchitecture-APPRCA).
+
+Start the server as described above. On the Jackal:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+export SERVER="ws://<SERVER_IP>:8050"
+export API_TOKEN="<same-token-as-server>"
+export CAMERA_ID="jackal-zed2i"
+export CMD_TOPIC="/j100_0390/platform/cmd_vel_unstamped"
+export LIDAR_TOPIC="/velodyne_points"
+export ENABLE_MOTION=0
+
+python3 apprca_robot_bridge.py
+```
+
+Start `apprca_live_goal.py` on the GPU/server computer, open the browser, enter
+an object name, and select **Start goal**. With `ENABLE_MOTION=0`, the entire
+perception, depth, command, timeout, and status path runs without moving the
+robot. The browser displays APPRCA's annotated image, the ZED depth map, and the
+current goal state.
+
+Only after a successful dry run, raised-wheel test, verified emergency stop, and
+confirmation that positive/negative angular commands turn in the expected
+directions should motion be enabled:
+
+```bash
+export ENABLE_MOTION=1
+export STANDOFF_M=1.0
+export MAX_FORWARD_MPS=0.18
+export SEARCH_RADPS=0.18
+python3 apprca_robot_bridge.py
+```
+
+The robot stops when control messages become stale, both range sources are
+invalid, the user presses **STOP**, or the target reaches the standoff distance.
+No reverse motion is used by this integration.
 
 | Mode | LEFT pane | RIGHT pane |
 |---|---|---|

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, html, asyncio, time
+import os, html, asyncio, time, json
 from typing import Dict, Tuple, Set, Optional
 from pathlib import Path
 
@@ -28,7 +28,29 @@ LATEST: Dict[Tuple[str, str], Tuple[bytes, float]] = {}
 # viewers per (camera_id, eye):
 VIEWERS: Dict[Tuple[str, str], Set[WebSocket]] = {}
 
+# APPRCA integration channels, keyed by camera_id.
+GOAL_CLIENTS: Dict[str, Set[WebSocket]] = {}
+CONTROL_CLIENTS: Dict[str, Set[WebSocket]] = {}
+STATUS_CLIENTS: Dict[str, Set[WebSocket]] = {}
+LATEST_GOAL: Dict[str, str] = {}
+LATEST_STATUS: Dict[str, str] = {}
+
 LATEST_LOCK = asyncio.Lock()
+
+
+async def _broadcast_text(clients: Dict[str, Set[WebSocket]], key: str, payload: str):
+    """Best-effort fan-out without holding the shared lock during network I/O."""
+    async with LATEST_LOCK:
+        targets = list(clients.get(key, set()))
+    dead = set()
+    for ws in targets:
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead.add(ws)
+    if dead:
+        async with LATEST_LOCK:
+            clients.setdefault(key, set()).difference_update(dead)
 
 # ================= Utilities =================
 def _check_token(header_val: Optional[str]):
@@ -59,7 +81,7 @@ async def ws_push(
         _check_token(token_val)
 
     eye = eye.lower().strip()
-    if eye not in ("left", "right"):
+    if eye not in ("left", "right", "apprca"):
         await websocket.close(code=4000)
         return
 
@@ -115,7 +137,7 @@ async def ws_view(
     eye: str = Query("left"),
 ):
     eye = eye.lower().strip()
-    if eye not in ("left", "right"):
+    if eye not in ("left", "right", "apprca"):
         await websocket.close(code=4000)
         return
 
@@ -139,43 +161,118 @@ async def ws_view(
         async with LATEST_LOCK:
             VIEWERS.get(key, set()).discard(websocket)
 
-# ================= Simple live page (LEFT & RIGHT) =================
+
+# ================= APPRCA goal/control/status =================
+@app.post("/api/goal")
+async def set_goal(camera_id: str = Query("jackal-zed2i"), target: str = Query(...)):
+    target = " ".join(target.strip().split())
+    if not target or len(target) > 100:
+        raise HTTPException(status_code=400, detail="Target must be 1-100 characters")
+    payload = json.dumps({"type": "goal", "camera_id": camera_id,
+                          "target": target, "timestamp": time.time()})
+    LATEST_GOAL[camera_id] = payload
+    await _broadcast_text(GOAL_CLIENTS, camera_id, payload)
+    return {"ok": True, "camera_id": camera_id, "target": target}
+
+
+@app.post("/api/stop")
+async def stop_goal(camera_id: str = Query("jackal-zed2i")):
+    payload = json.dumps({"type": "stop", "camera_id": camera_id,
+                          "timestamp": time.time()})
+    LATEST_GOAL[camera_id] = payload
+    await _broadcast_text(GOAL_CLIENTS, camera_id, payload)
+    await _broadcast_text(CONTROL_CLIENTS, camera_id, payload)
+    return {"ok": True, "camera_id": camera_id}
+
+
+async def _receiver(websocket: WebSocket, clients, camera_id: str, initial: Optional[str] = None):
+    await websocket.accept()
+    async with LATEST_LOCK:
+        clients.setdefault(camera_id, set()).add(websocket)
+    if initial:
+        await websocket.send_text(initial)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        async with LATEST_LOCK:
+            clients.setdefault(camera_id, set()).discard(websocket)
+
+
+@app.websocket("/ws/goal")
+async def ws_goal(websocket: WebSocket, camera_id: str = Query("jackal-zed2i")):
+    await _receiver(websocket, GOAL_CLIENTS, camera_id, LATEST_GOAL.get(camera_id))
+
+
+@app.websocket("/ws/control")
+async def ws_control(websocket: WebSocket, camera_id: str = Query("jackal-zed2i")):
+    await _receiver(websocket, CONTROL_CLIENTS, camera_id)
+
+
+@app.websocket("/ws/status")
+async def ws_status(websocket: WebSocket, camera_id: str = Query("jackal-zed2i")):
+    await _receiver(websocket, STATUS_CLIENTS, camera_id, LATEST_STATUS.get(camera_id))
+
+
+@app.websocket("/ws/control/push")
+async def ws_control_push(websocket: WebSocket, camera_id: str = Query("jackal-zed2i"),
+                          authorization: Optional[str] = Query(default=None)):
+    if API_TOKEN:
+        _check_token(authorization or websocket.headers.get("authorization"))
+    await websocket.accept()
+    try:
+        while True:
+            payload = await websocket.receive_text()
+            await _broadcast_text(CONTROL_CLIENTS, camera_id, payload)
+    except WebSocketDisconnect:
+        pass
+
+
+@app.websocket("/ws/status/push")
+async def ws_status_push(websocket: WebSocket, camera_id: str = Query("jackal-zed2i"),
+                         authorization: Optional[str] = Query(default=None)):
+    if API_TOKEN:
+        _check_token(authorization or websocket.headers.get("authorization"))
+    await websocket.accept()
+    try:
+        while True:
+            payload = await websocket.receive_text()
+            LATEST_STATUS[camera_id] = payload
+            await _broadcast_text(STATUS_CLIENTS, camera_id, payload)
+    except WebSocketDisconnect:
+        pass
+
+# ================= Integrated APPRCA live page =================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (
-        "<!doctype html><html><head><meta charset='utf-8' />"
-        "<title>ZED WS Live</title>"
-        "<style>body{margin:0;background:#111;color:#eee;font-family:sans-serif}"
-        ".row{display:flex;gap:8px;padding:8px}"
-        ".pane{flex:1;background:#000;text-align:center}"
-        "img{max-width:100%;height:auto;display:block;margin:0 auto}"
-        "label,input{font-size:14px;margin:4px}button{margin-left:8px}</style>"
-        "</head><body>"
-        "<div style='padding:8px'>"
-        "<label>Camera ID:</label><input id='cam' value='jackal-zed2i'/>"
-        "<button onclick='connect()'>Connect</button>"
-        "</div>"
-        "<div class='row'>"
-        "<div class='pane'><div>LEFT</div><img id='left' /></div>"
-        "<div class='pane'><div>RIGHT</div><img id='right' /></div>"
-        "</div>"
-        "<script>"
-        "let wsL, wsR, urlBase = (location.protocol==='https:'?'wss://':'ws://')+location.host;"
-        "let lastURLL=null, lastURLR=null;"
-        "function connect(){"
-        " const cam=document.getElementById('cam').value;"
-        " if(wsL){wsL.close()} if(wsR){wsR.close()}"
-        " wsL=new WebSocket(urlBase+'/ws/view?camera_id='+encodeURIComponent(cam)+'&eye=left');"
-        " wsR=new WebSocket(urlBase+'/ws/view?camera_id='+encodeURIComponent(cam)+'&eye=right');"
-        " wsL.binaryType='blob'; wsR.binaryType='blob';"
-        " wsL.onmessage=(ev)=>{const url=URL.createObjectURL(ev.data);"
-        "  document.getElementById('left').src=url; if(lastURLL) URL.revokeObjectURL(lastURLL); lastURLL=url;};"
-        " wsR.onmessage=(ev)=>{const url=URL.createObjectURL(ev.data);"
-        "  document.getElementById('right').src=url; if(lastURLR) URL.revokeObjectURL(lastURLR); lastURLR=url;};"
-        "}"
-        "</script>"
-        "</body></html>"
-    )
+    return """<!doctype html><html><head><meta charset='utf-8'/>
+<title>APPRCA Jackal Goal Console</title><style>
+body{margin:0;background:#101319;color:#eef2f7;font:15px system-ui,sans-serif}
+header{padding:14px 18px;background:#171c25;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+input,button{font:inherit;padding:8px;border-radius:6px;border:1px solid #465063;background:#0d1117;color:#fff}
+button{cursor:pointer;background:#1769aa}.stop{background:#a52b2b}.status{padding:10px 18px;color:#8ee3a2}
+.row{display:flex;gap:10px;padding:10px}.pane{flex:1;background:#050607;text-align:center;padding:6px}
+img{width:100%;height:auto;display:block}.label{padding:6px;color:#aeb8c7}
+</style></head><body>
+<header><strong>APPRCA + Jackal</strong><label>Camera</label><input id='cam' value='jackal-zed2i'/>
+<label>Object goal</label><input id='target' placeholder='chair'/>
+<button onclick='connect()'>Connect</button><button onclick='startGoal()'>Start goal</button>
+<button class='stop' onclick='stopGoal()'>STOP</button></header>
+<div id='status' class='status'>Disconnected</div><div class='row'>
+<div class='pane'><div class='label'>APPRCA detection</div><img id='left'/></div>
+<div class='pane'><div class='label'>ZED depth</div><img id='right'/></div></div>
+<script>
+let sockets=[],urls=[null,null],base=(location.protocol==='https:'?'wss://':'ws://')+location.host;
+const enc=encodeURIComponent;
+function stream(eye,img,n){let c=enc(cam.value),w=new WebSocket(base+'/ws/view?camera_id='+c+'&eye='+eye);
+w.binaryType='blob';w.onmessage=e=>{let u=URL.createObjectURL(e.data);img.src=u;if(urls[n])URL.revokeObjectURL(urls[n]);urls[n]=u};sockets.push(w)}
+function connect(){sockets.forEach(x=>x.close());sockets=[];stream('apprca',left,0);stream('right',right,1);
+let w=new WebSocket(base+'/ws/status?camera_id='+enc(cam.value));w.onmessage=e=>{try{let s=JSON.parse(e.data);status.textContent=`${s.state||'UNKNOWN'} | goal: ${s.target||'-'} | distance: ${s.distance_m??'-'} m | ${s.message||''}`}catch{status.textContent=e.data}};sockets.push(w);status.textContent='Connected; waiting for robot status'}
+async function startGoal(){let t=target.value.trim();if(!t)return;await fetch('/api/goal?camera_id='+enc(cam.value)+'&target='+enc(t),{method:'POST'});status.textContent='Goal submitted: '+t}
+async function stopGoal(){await fetch('/api/stop?camera_id='+enc(cam.value),{method:'POST'});status.textContent='STOP requested'}
+</script></body></html>"""
 
 if __name__ == "__main__":
     import uvicorn
